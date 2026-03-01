@@ -64,6 +64,9 @@ The app can sync vaults from Dropbox. To enable this:
 4. Name your app and click **Create app**
 5. Under **Permissions**, enable `files.metadata.read` and `files.content.read`
 6. Under **Settings**, note your **App key**
+7. Under **Settings** → **OAuth 2** → **Redirect URIs**, add both:
+   - `unoskeleton://oauth/callback`
+   - `exp+unoskeleton://oauth/callback`
 
 You can provide the app key in two ways:
 

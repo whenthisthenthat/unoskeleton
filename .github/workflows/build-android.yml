@@ -12,6 +12,11 @@ on:
         description: "Version for the release (e.g., 1.0.0)"
         required: true
         type: string
+      force_cache_eviction:
+        description: "Force-bust all caches (ccache, Gradle, node_modules, prebuild)"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -76,6 +81,8 @@ jobs:
   build:
     name: Build APK
     runs-on: ubuntu-latest
+    env:
+      CACHE_BUSTER: ${{ inputs.force_cache_eviction == true && format('-bust-{0}', github.run_id) || '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -91,12 +98,44 @@ jobs:
           distribution: "zulu"
           java-version: "17"
 
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ndk-${{ hashFiles('package-lock.json') }}
+          max-size: 1G
+          restore: ${{ inputs.force_cache_eviction != true }}
+
+      - name: Configure ccache for NDK builds
+        run: |
+          ccache --set-config compiler_check=content
+          ccache --set-config depend_mode=true
+          ccache --set-config hash_dir=false
+          ccache --set-config sloppiness=file_stat_matches,include_file_ctime,include_file_mtime,time_macros
+
+          mkdir -p ~/.gradle/init.d
+          cat > ~/.gradle/init.d/ccache.gradle << 'EOF'
+          allprojects {
+              afterEvaluate { project ->
+                  if (project.plugins.hasPlugin('com.android.application') ||
+                      project.plugins.hasPlugin('com.android.library')) {
+                      try {
+                          project.android.defaultConfig.externalNativeBuild.cmake.arguments.add(
+                              "-DANDROID_CCACHE=ccache"
+                          )
+                      } catch (Exception ignored) {
+                          // Module has no CMake configuration
+                      }
+                  }
+              }
+          }
+          EOF
+
       - name: Cache node_modules
         id: node-cache-build
         uses: actions/cache@v4
         with:
           path: node_modules
-          key: node-modules-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          key: node-modules-${{ runner.os }}-${{ hashFiles('package-lock.json') }}${{ env.CACHE_BUSTER }}
 
       - name: Install dependencies
         if: steps.node-cache-build.outputs.cache-hit != 'true'
@@ -107,7 +146,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: android
-          key: prebuild-${{ runner.os }}-${{ hashFiles('package-lock.json', 'app.json', 'app.config.ts') }}
+          key: prebuild-${{ runner.os }}-${{ hashFiles('package-lock.json', 'app.json', 'app.config.ts') }}${{ env.CACHE_BUSTER }}
 
       - name: Generate native Android project
         if: steps.prebuild-cache.outputs.cache-hit != 'true'
@@ -159,7 +198,7 @@ jobs:
             android/.gradle
             android/app/.cxx
             android/app/build
-          key: gradle-${{ runner.os }}-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties', 'android/**/*.gradle') }}
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties', 'android/**/*.gradle') }}${{ env.CACHE_BUSTER }}
           restore-keys: |
             gradle-${{ runner.os }}-
 
